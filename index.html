@@ -4,21 +4,41 @@
 <title>QR receive</title>
 <style>
 body{font:16px system-ui;margin:0;padding:1rem;background:#111;color:#eee}
-video{width:100%;border-radius:8px;background:#000}
+h2{margin:.2rem 0 .8rem}
+#cam{position:relative;width:min(100%,300px);aspect-ratio:1;margin:0 auto;border-radius:12px;overflow:hidden;background:#000}
+#cam video{width:100%;height:100%;object-fit:cover;display:block}
+#cam i{position:absolute;width:34px;height:34px;border:0 solid #fff;transition:border-color .1s}
+#cam.hit i{border-color:#3ecf6e}
+.tl{top:8px;left:8px;border-width:4px 0 0 4px!important}.tr{top:8px;right:8px;border-width:4px 4px 0 0!important}
+.bl{bottom:8px;left:8px;border-width:0 0 4px 4px!important}.br{bottom:8px;right:8px;border-width:0 4px 4px 0!important}
+#hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#777;font-size:14px}
 button{font:inherit;padding:.7rem 1rem;margin:.3rem .3rem .3rem 0;border-radius:8px;border:0;background:#2d7ff9;color:#fff}
-#bar{height:10px;background:#333;border-radius:5px;overflow:hidden;margin:.6rem 0}
-#fill{height:100%;width:0;background:#3ecf6e}
+.c{text-align:center}
+#stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:.8rem 0}
+#stats div{background:#1c1c1c;border-radius:8px;padding:.4rem;text-align:center}
+#stats b{display:block;font-size:17px;font-variant-numeric:tabular-nums}
+#stats span{font-size:11px;color:#999}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(36px,1fr));gap:4px;max-height:42vh;overflow:auto}
+#grid div{border:1px solid #444;border-radius:5px;text-align:center;font-size:12px;padding:5px 0;color:#aaa;font-variant-numeric:tabular-nums}
+#grid .got{background:#1f8a47;border-color:#1f8a47;color:#fff}
+#grid .now{outline:2px solid #fff;outline-offset:1px}
 .m{color:#999;font-size:13px}
 </style>
 <h2>QR receive</h2>
-<button id=go>Start camera</button>
-<video id=v playsinline muted hidden></video>
-<div id=bar><div id=fill></div></div>
-<p id=st>Open the sender on your laptop, then point the camera at its screen.</p>
-<p id=miss class=m></p>
+<div id=cam><video id=v playsinline muted></video><i class=tl></i><i class=tr></i><i class=bl></i><i class=br></i><div id=hint>Camera off</div></div>
+<p class="m c" id=tip>Keep the QR code inside the square. Nothing outside it is scanned.</p>
+<div class=c><button id=go>Start camera</button></div>
+<div id=stats>
+  <div><b id=tm>0:00.0</b><span>time</span></div>
+  <div><b id=gf>0/0</b><span>frames</span></div>
+  <div><b id=lp>&ndash;</b><span>loop</span></div>
+  <div><b id=ll>&ndash;</b><span>last loop</span></div>
+</div>
+<p id=st class=m>Open the sender on your laptop, then start the camera.</p>
 <div id=done hidden>
   <button id=dl>Download .zip</button><button id=sh hidden>Share / Save to Files</button>
 </div>
+<div id=grid></div>
 <canvas id=c hidden></canvas>
 <!-- jsQR 1.4.0 (Apache-2.0), inlined so the page works offline -->
 <script>(function webpackUniversalModuleDefinition(root, factory) {
@@ -10152,20 +10172,31 @@ class Assembler{
 const $=id=>document.getElementById(id);
 const asm=new Assembler();
 const ctx=$("c").getContext("2d",{willReadFrequently:true});
-let stream,done=false;
+let stream,done=false,gridTid=null,t0=null,tmr,lastIdx=-1,loop=1,lastWrap=null,lastLoop=null,seenAt=[];
+const clock=ms=>{const s=ms/1000;return Math.floor(s/60)+":"+(s%60).toFixed(1).padStart(4,"0")};
 
-function show(){
-  const g=asm.chunks.size,n=asm.n;
-  $("fill").style.width=(n?100*g/n:0)+"%";
-  $("st").textContent=n?`${g}/${n} frames`:"Scanning…";
-  const miss=[];for(let i=0;i<n&&miss.length<8;i++)if(!asm.chunks.has(i))miss.push(i+1);
-  $("miss").textContent=g<n?"Missing: "+miss.join(", ")+(n-g>8?" …":""):"";
+function resetRun(){ // new transfer, or a failed checksum: start the stats from zero
+  t0=null;lastIdx=-1;loop=1;lastWrap=lastLoop=null;seenAt=[];
+  $("tm").textContent="0:00.0";
+}
+function buildGrid(){
+  gridTid=asm.tid;
+  $("grid").replaceChildren(...Array.from({length:asm.n},(_,i)=>{const d=document.createElement("div");d.textContent=i+1;return d}));
+}
+function upd(){
+  $("gf").textContent=`${asm.chunks.size}/${asm.n}`;
+  $("lp").textContent=loop;
+  $("ll").textContent=lastLoop===null?"–":lastLoop.toFixed(1)+"s";
 }
 
-function finish(bytes){
-  done=true;stream.getTracks().forEach(t=>t.stop());$("v").hidden=true;
+function finish(bytes,now){
+  done=true;clearInterval(tmr);
+  $("tm").textContent=clock(now-t0);
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  $("cam").hidden=true;$("tip").hidden=true;$("go").hidden=true;
+  $("grid").children[lastIdx].classList.remove("now");
   const file=new File([bytes],`received-${asm.tid}.zip`,{type:"application/zip"});
-  $("st").textContent=`Done: ${asm.n} frames, ${(bytes.length/1024).toFixed(0)} KB. Save the zip, then unzip it in your Files app.`;
+  $("st").textContent=`Done in ${clock(now-t0)} · ${asm.n} frames, ${(bytes.length/1024).toFixed(0)} KB. Save the zip, then unzip it in your Files app.`;
   $("done").hidden=false;
   $("dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=file.name;a.click()};
   if(navigator.canShare&&navigator.canShare({files:[file]})){
@@ -10173,26 +10204,50 @@ function finish(bytes){
   }
 }
 
+function handle(text){ // one decoded QR string
+  const p=text.split("|"),idx=p.length===6&&p[0]==="QT1"?parseInt(p[2]):-1;
+  if(!(idx>=0))return;
+  const cam=$("cam");cam.classList.add("hit");setTimeout(()=>cam.classList.remove("hit"),150);
+  const now=performance.now(),out=asm.feed(text);
+  if(asm.tid===null){ // checksum failed and the assembler cleared itself
+    for(const d of $("grid").children)d.className="";
+    resetRun();upd();$("st").textContent="Checksum failed, starting over.";return;
+  }
+  if(asm.tid!==gridTid){buildGrid();resetRun();t0=now}
+  const cells=$("grid").children;
+  if(!cells[idx])return;
+  if(lastIdx>=0&&idx<lastIdx){ // index went backwards: the sender started a new loop
+    loop++;if(lastWrap!==null)lastLoop=(now-lastWrap)/1000;lastWrap=now;
+  }
+  if(lastIdx>=0)cells[lastIdx].classList.remove("now");
+  if(!cells[idx].classList.contains("got"))seenAt.push(now);
+  cells[idx].classList.add("got","now");
+  lastIdx=idx;
+  seenAt=seenAt.filter(t=>now-t<5000);
+  const rate=seenAt.length/Math.max(1,Math.min(5,(now-t0)/1000));
+  $("st").textContent=`Now seeing #${idx+1} · ${rate.toFixed(1)} new frames/s`;
+  upd();
+  if(out)finish(out,now);
+}
+
 function scan(){
-  const v=$("v"),c=$("c");
-  if(!v.videoWidth)return;
-  if(c.width!==v.videoWidth){c.width=v.videoWidth;c.height=v.videoHeight}
-  ctx.drawImage(v,0,0);
-  const img=ctx.getImageData(0,0,c.width,c.height);
-  const code=jsQR(img.data,img.width,img.height,{inversionAttempts:"dontInvert"});
-  if(!code||!code.data)return;
-  const hadFrames=asm.chunks.size,out=asm.feed(code.data);
-  if(out)return finish(out);
-  if(hadFrames&&!asm.chunks.size)$("st").textContent="Checksum failed, scanning again…";
-  else show();
+  const v=$("v"),c=$("c"),s=Math.min(v.videoWidth,v.videoHeight);
+  if(!s)return;
+  // the visible square (object-fit: cover) is the centre square of the video; only that is decoded
+  if(c.width!==s){c.width=c.height=s}
+  ctx.drawImage(v,(v.videoWidth-s)/2,(v.videoHeight-s)/2,s,s,0,0,s,s);
+  const code=jsQR(ctx.getImageData(0,0,s,s).data,s,s,{inversionAttempts:"dontInvert"});
+  if(code&&code.data)handle(code.data);
 }
 
 $("go").onclick=async()=>{
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}},audio:false});
   }catch(e){$("st").textContent="Camera unavailable: "+e.message+" (the page must be opened over https).";return}
-  const v=$("v");v.srcObject=stream;v.hidden=false;await v.play();$("go").hidden=true;
-  const loop=()=>{if(done)return;scan();setTimeout(loop,30)};loop();
+  const v=$("v");v.srcObject=stream;await v.play();$("go").hidden=true;$("hint").hidden=true;
+  $("st").textContent="Scanning…";
+  tmr=setInterval(()=>{if(t0)$("tm").textContent=clock(performance.now()-t0)},100);
+  const spin=()=>{if(done)return;scan();setTimeout(spin,30)};spin();
 };
 
 if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js");

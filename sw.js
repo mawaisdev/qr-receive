@@ -1,5 +1,6 @@
-// Cache the page on first visit so it opens offline afterwards.
-// ponytail: cache-first, so after editing index.html bump the cache name to ship the update.
-const C = "qrt1";
-self.addEventListener("install", e => e.waitUntil(caches.open(C).then(c => c.add("./"))));
-self.addEventListener("fetch", e => e.respondWith(caches.match(e.request).then(r => r || fetch(e.request))));
+// Network-first, falling back to the saved copy: updates show up when online, the page still opens offline.
+const C = "qrt";
+self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(C).then(c => c.add("./"))); });
+self.addEventListener("fetch", e => e.respondWith(
+  fetch(e.request).then(r => { const copy = r.clone(); caches.open(C).then(c => c.put(e.request, copy)); return r; })
+    .catch(() => caches.match(e.request))));

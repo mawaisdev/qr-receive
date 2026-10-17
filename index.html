@@ -24,6 +24,7 @@ button{font:inherit;padding:.7rem 1rem;margin:.3rem .3rem .3rem 0;border-radius:
 #grid .got{background:#1f8a47;border-color:#1f8a47;color:#fff}
 #grid .now{outline:2px solid #fff;outline-offset:1px}
 .m{color:#999;font-size:13px}
+#miss{color:#f0b429;font-size:15px;margin:.2rem 0;word-break:break-word}
 </style>
 <h2>QR receive</h2>
 <div id=cam><video id=v playsinline muted></video><i class=tl></i><i class=tr></i><i class=bl></i><i class=br></i><div id=hint>Camera off</div></div>
@@ -35,6 +36,7 @@ button{font:inherit;padding:.7rem 1rem;margin:.3rem .3rem .3rem 0;border-radius:
   <div><b id=lp>&ndash;</b><span>loop</span></div>
   <div><b id=ll>&ndash;</b><span>last loop</span></div>
 </div>
+<p id=miss></p>
 <p id=st class=m>Open the sender on your laptop, then start the camera.</p>
 <div id=done hidden>
   <button id=dl>Download .zip</button><button id=sh hidden>Share / Save to Files</button>
@@ -10184,7 +10186,17 @@ function buildGrid(){
   gridTid=asm.tid;
   $("grid").replaceChildren(...Array.from({length:asm.n},(_,i)=>{const d=document.createElement("div");d.textContent=i+1;return d}));
 }
+// "Missing: 389, 453, 545-550": the numbers can be typed straight into the sender's "Resend" box
+function missText(){
+  if(!asm.n||!asm.chunks.size||asm.chunks.size===asm.n)return "";
+  const miss=[];for(let i=0;i<asm.n;i++)if(!asm.chunks.has(i))miss.push(i+1);
+  if(miss.length>60)return `${miss.length} frames missing`;
+  const out=[];
+  for(let i=0;i<miss.length;){let j=i;while(miss[j+1]===miss[j]+1)j++;out.push(j>i?`${miss[i]}-${miss[j]}`:`${miss[i]}`);i=j+1}
+  return "Missing: "+out.join(", ");
+}
 function upd(){
+  $("miss").textContent=missText();
   $("gf").textContent=`${asm.chunks.size}/${asm.n}`;
   $("lp").textContent=loop;
   $("ll").textContent=lastLoop===null?"–":lastLoop.toFixed(1)+"s";
